@@ -11,7 +11,38 @@ import {
   workspaceSchema,
 } from "@/lib/validations";
 import { slugify } from "@/lib/utils";
+import { hasPermission, canAttempt } from "@/lib/rbac";
 import bcrypt from "bcryptjs";
+
+// ─── Helpers ─────────────────────────────────────────────────
+
+async function getSessionUser() {
+  const session = await auth();
+  if (!session?.user?.id) throw new Error("Unauthorized");
+  return session.user;
+}
+
+async function getMembership(userId: string, workspaceId: string) {
+  const membership = await prisma.workspaceMember.findUnique({
+    where: { userId_workspaceId: { userId, workspaceId } },
+  });
+  if (!membership) throw new Error("Not a workspace member");
+  return membership;
+}
+
+async function getMembershipByUser(userId: string) {
+  const membership = await prisma.workspaceMember.findFirst({
+    where: { userId },
+    include: { workspace: true },
+  });
+  return membership;
+}
+
+function requirePermission(role: string, action: Parameters<typeof hasPermission>[1], context?: Parameters<typeof hasPermission>[2]) {
+  if (!hasPermission(role, action, context)) {
+    throw new Error(`Permission denied: ${action}`);
+  }
+}
 
 // ─── Auth Actions ────────────────────────────────────────────
 
@@ -67,8 +98,7 @@ export async function getWorkspaces() {
 }
 
 export async function createWorkspace(data: { name: string; description?: string }) {
-  const session = await auth();
-  if (!session?.user?.id) throw new Error("Unauthorized");
+  const user = await getSessionUser();
 
   const parsed = workspaceSchema.parse(data);
   const workspace = await prisma.workspace.create({
@@ -78,14 +108,14 @@ export async function createWorkspace(data: { name: string; description?: string
       description: parsed.description,
       members: {
         create: {
-          userId: session.user.id,
+          userId: user.id!,
           role: "ADMIN",
         },
       },
     },
   });
 
-  revalidatePath("/");
+  revalidatePath("/dashboard");
   return workspace;
 }
 
@@ -123,8 +153,9 @@ export async function getProject(projectId: string) {
 }
 
 export async function createProject(workspaceId: string, data: any) {
-  const session = await auth();
-  if (!session?.user?.id) throw new Error("Unauthorized");
+  const user = await getSessionUser();
+  const membership = await getMembership(user.id!, workspaceId);
+  requirePermission(membership.role, "CREATE_PROJECT");
 
   const parsed = projectSchema.parse(data);
   const project = await prisma.project.create({
@@ -144,22 +175,36 @@ export async function createProject(workspaceId: string, data: any) {
     data: {
       action: "PROJECT_CREATED",
       details: `Created project "${project.name}"`,
-      userId: session.user.id,
+      userId: user.id!,
       workspaceId,
       projectId: project.id,
     },
   });
 
-  revalidatePath("/");
+  revalidatePath("/dashboard");
   revalidatePath("/projects");
   return project;
 }
 
 export async function updateProject(projectId: string, data: any) {
-  const session = await auth();
-  if (!session?.user?.id) throw new Error("Unauthorized");
+  const user = await getSessionUser();
 
-  const project = await prisma.project.update({
+  const project = await prisma.project.findUnique({ where: { id: projectId } });
+  if (!project) throw new Error("Project not found");
+
+  const membership = await getMembership(user.id!, project.workspaceId);
+
+  // Check if user is a member of this project (has tasks assigned)
+  const isProjectMember = await prisma.task.findFirst({
+    where: { projectId, assigneeId: user.id! },
+  });
+
+  requirePermission(membership.role, "MANAGE_PROJECT", {
+    userId: user.id!,
+    isProjectMember: !!isProjectMember,
+  });
+
+  const updated = await prisma.project.update({
     where: { id: projectId },
     data: {
       ...data,
@@ -167,18 +212,33 @@ export async function updateProject(projectId: string, data: any) {
     },
   });
 
-  revalidatePath("/");
+  revalidatePath("/dashboard");
   revalidatePath("/projects");
   revalidatePath(`/projects/${projectId}`);
-  return project;
+  return updated;
 }
 
 export async function deleteProject(projectId: string) {
-  const session = await auth();
-  if (!session?.user?.id) throw new Error("Unauthorized");
+  const user = await getSessionUser();
+
+  const project = await prisma.project.findUnique({ where: { id: projectId } });
+  if (!project) throw new Error("Project not found");
+
+  const membership = await getMembership(user.id!, project.workspaceId);
+
+  // For PM — check activity log to see if they created the project
+  const createdBy = await prisma.activityLog.findFirst({
+    where: { projectId, action: "PROJECT_CREATED" },
+    select: { userId: true },
+  });
+
+  requirePermission(membership.role, "DELETE_PROJECT", {
+    userId: user.id!,
+    resourceOwnerId: createdBy?.userId,
+  });
 
   await prisma.project.delete({ where: { id: projectId } });
-  revalidatePath("/");
+  revalidatePath("/dashboard");
   revalidatePath("/projects");
 }
 
@@ -199,10 +259,28 @@ export async function getTasks(projectId?: string) {
 }
 
 export async function createTask(data: any) {
-  const session = await auth();
-  if (!session?.user?.id) throw new Error("Unauthorized");
+  const user = await getSessionUser();
 
   const parsed = taskSchema.parse(data);
+
+  // Get the project to find the workspace
+  const project = await prisma.project.findUnique({
+    where: { id: parsed.projectId },
+    select: { workspaceId: true },
+  });
+  if (!project) throw new Error("Project not found");
+
+  const membership = await getMembership(user.id!, project.workspaceId);
+
+  // Developer: can only create tasks in projects they're assigned to
+  const isProjectMember = await prisma.task.findFirst({
+    where: { projectId: parsed.projectId, assigneeId: user.id! },
+  });
+
+  requirePermission(membership.role, "CREATE_TASK", {
+    userId: user.id!,
+    isProjectMember: !!isProjectMember,
+  });
 
   const maxOrder = await prisma.task.findFirst({
     where: { projectId: parsed.projectId, status: parsed.status },
@@ -225,31 +303,65 @@ export async function createTask(data: any) {
     include: { assignee: true, subtasks: true, project: true },
   });
 
-  const project = await prisma.project.findUnique({
-    where: { id: parsed.projectId },
-    select: { workspaceId: true },
-  });
-
   await prisma.activityLog.create({
     data: {
       action: "TASK_CREATED",
       details: `Created task "${task.title}"`,
-      userId: session.user.id,
-      workspaceId: project?.workspaceId,
+      userId: user.id!,
+      workspaceId: project.workspaceId,
       projectId: parsed.projectId,
       taskId: task.id,
     },
   });
 
-  revalidatePath("/");
+  revalidatePath("/dashboard");
   revalidatePath("/tasks");
   revalidatePath(`/projects/${parsed.projectId}`);
   return task;
 }
 
 export async function updateTask(taskId: string, data: any) {
-  const session = await auth();
-  if (!session?.user?.id) throw new Error("Unauthorized");
+  const user = await getSessionUser();
+
+  const existingTask = await prisma.task.findUnique({
+    where: { id: taskId },
+    include: { project: true },
+  });
+  if (!existingTask) throw new Error("Task not found");
+
+  const membership = await getMembership(user.id!, existingTask.project.workspaceId);
+
+  // Check if changing assignee — requires ASSIGN_TASK permission
+  if (data.assigneeId !== undefined && data.assigneeId !== existingTask.assigneeId) {
+    requirePermission(membership.role, "ASSIGN_TASK");
+  }
+
+  // Check general update permission
+  const isOwnTask = existingTask.assigneeId === user.id!;
+  const isProjectMember = !!(await prisma.task.findFirst({
+    where: { projectId: existingTask.projectId, assigneeId: user.id! },
+  }));
+
+  const canManage = hasPermission(membership.role, "MANAGE_PROJECT", { userId: user.id!, isProjectMember });
+  
+  let allowed = isOwnTask || canManage;
+
+  if (!allowed && data.status) {
+    if (data.status === "DONE" && (hasPermission(membership.role, "APPROVE_TASK") || hasPermission(membership.role, "QA_TASK"))) {
+      allowed = true;
+    }
+    if (data.status === "REVIEW" && hasPermission(membership.role, "REVIEW_CODE")) {
+      allowed = true;
+    }
+  }
+
+  if (!allowed) {
+    // fallback to checking UPDATE_OWN_TASK context
+    requirePermission(membership.role, "UPDATE_OWN_TASK", {
+      userId: user.id!,
+      resourceOwnerId: existingTask.assigneeId || undefined,
+    });
+  }
 
   const task = await prisma.task.update({
     where: { id: taskId },
@@ -261,44 +373,81 @@ export async function updateTask(taskId: string, data: any) {
   });
 
   if (data.status) {
-    const project = await prisma.project.findUnique({
-      where: { id: task.projectId },
-      select: { workspaceId: true },
-    });
-
     await prisma.activityLog.create({
       data: {
         action: "TASK_STATUS_CHANGED",
         details: `Changed task "${task.title}" status to ${data.status}`,
-        userId: session.user.id,
-        workspaceId: project?.workspaceId,
+        userId: user.id!,
+        workspaceId: existingTask.project.workspaceId,
         projectId: task.projectId,
         taskId: task.id,
       },
     });
   }
 
-  revalidatePath("/");
+  revalidatePath("/dashboard");
   revalidatePath("/tasks");
   revalidatePath(`/projects/${task.projectId}`);
   return task;
 }
 
 export async function deleteTask(taskId: string) {
-  const session = await auth();
-  if (!session?.user?.id) throw new Error("Unauthorized");
+  const user = await getSessionUser();
 
-  const task = await prisma.task.findUnique({ where: { id: taskId } });
+  const task = await prisma.task.findUnique({
+    where: { id: taskId },
+    include: { project: true },
+  });
+  if (!task) throw new Error("Task not found");
+
+  const membership = await getMembership(user.id!, task.project.workspaceId);
+  requirePermission(membership.role, "MANAGE_PROJECT", {
+    userId: user.id!,
+    isProjectMember: true,
+  });
+
   await prisma.task.delete({ where: { id: taskId } });
 
-  revalidatePath("/");
+  revalidatePath("/dashboard");
   revalidatePath("/tasks");
-  if (task) revalidatePath(`/projects/${task.projectId}`);
+  revalidatePath(`/projects/${task.projectId}`);
 }
 
 export async function moveTask(taskId: string, newStatus: string, newOrderIndex: number) {
-  const session = await auth();
-  if (!session?.user?.id) throw new Error("Unauthorized");
+  const user = await getSessionUser();
+
+  const existingTask = await prisma.task.findUnique({
+    where: { id: taskId },
+    include: { project: true },
+  });
+  if (!existingTask) throw new Error("Task not found");
+
+  const membership = await getMembership(user.id!, existingTask.project.workspaceId);
+
+  const isOwnTask = existingTask.assigneeId === user.id!;
+  const isProjectMember = !!(await prisma.task.findFirst({
+    where: { projectId: existingTask.projectId, assigneeId: user.id! },
+  }));
+
+  const canManage = hasPermission(membership.role, "MANAGE_PROJECT", { userId: user.id!, isProjectMember });
+  
+  let allowed = isOwnTask || canManage;
+
+  if (!allowed && newStatus) {
+    if (newStatus === "DONE" && (hasPermission(membership.role, "APPROVE_TASK") || hasPermission(membership.role, "QA_TASK"))) {
+      allowed = true;
+    }
+    if (newStatus === "REVIEW" && hasPermission(membership.role, "REVIEW_CODE")) {
+      allowed = true;
+    }
+  }
+
+  if (!allowed) {
+    requirePermission(membership.role, "UPDATE_OWN_TASK", {
+      userId: user.id!,
+      resourceOwnerId: existingTask.assigneeId || undefined,
+    });
+  }
 
   const task = await prisma.task.update({
     where: { id: taskId },
@@ -310,14 +459,14 @@ export async function moveTask(taskId: string, newStatus: string, newOrderIndex:
     data: {
       action: "TASK_MOVED",
       details: `Moved task "${task.title}" to ${newStatus}`,
-      userId: session.user.id,
+      userId: user.id!,
       workspaceId: task.project.workspaceId,
       projectId: task.projectId,
       taskId: task.id,
     },
   });
 
-  revalidatePath("/");
+  revalidatePath("/dashboard");
   revalidatePath("/tasks");
   revalidatePath(`/projects/${task.projectId}`);
   return task;
@@ -339,14 +488,14 @@ export async function addComment(data: { content: string; taskId: string }) {
     include: { author: true },
   });
 
-  revalidatePath("/");
+  revalidatePath("/dashboard");
   revalidatePath("/tasks");
   return comment;
 }
 
 export async function deleteComment(commentId: string) {
   await prisma.comment.delete({ where: { id: commentId } });
-  revalidatePath("/");
+  revalidatePath("/dashboard");
   revalidatePath("/tasks");
 }
 
@@ -361,7 +510,7 @@ export async function addSubtask(data: { title: string; taskId: string }) {
     },
   });
 
-  revalidatePath("/");
+  revalidatePath("/dashboard");
   revalidatePath("/tasks");
   return subtask;
 }
@@ -375,14 +524,14 @@ export async function toggleSubtask(subtaskId: string) {
     data: { isCompleted: !subtask.isCompleted },
   });
 
-  revalidatePath("/");
+  revalidatePath("/dashboard");
   revalidatePath("/tasks");
   return updated;
 }
 
 export async function deleteSubtask(subtaskId: string) {
   await prisma.subtask.delete({ where: { id: subtaskId } });
-  revalidatePath("/");
+  revalidatePath("/dashboard");
   revalidatePath("/tasks");
 }
 
@@ -402,6 +551,10 @@ export async function getWorkspaceMembers(workspaceId: string) {
 }
 
 export async function addMember(workspaceId: string, data: { email: string; role: string }) {
+  const currentUser = await getSessionUser();
+  const membership = await getMembership(currentUser.id!, workspaceId);
+  requirePermission(membership.role, "MANAGE_MEMBERS");
+
   const user = await prisma.user.findUnique({ where: { email: data.email } });
   if (!user) throw new Error("User not found with that email");
 
@@ -419,23 +572,100 @@ export async function addMember(workspaceId: string, data: { email: string; role
     include: { user: true },
   });
 
-  revalidatePath("/");
+  revalidatePath("/dashboard");
   revalidatePath("/team");
   return member;
 }
 
 export async function removeMember(memberId: string) {
+  const currentUser = await getSessionUser();
+
+  const target = await prisma.workspaceMember.findUnique({ where: { id: memberId } });
+  if (!target) throw new Error("Member not found");
+
+  const membership = await getMembership(currentUser.id!, target.workspaceId);
+  requirePermission(membership.role, "MANAGE_MEMBERS");
+
   await prisma.workspaceMember.delete({ where: { id: memberId } });
-  revalidatePath("/");
+  revalidatePath("/dashboard");
   revalidatePath("/team");
 }
 
 export async function updateMemberRole(memberId: string, role: string) {
+  const currentUser = await getSessionUser();
+
+  const target = await prisma.workspaceMember.findUnique({ where: { id: memberId } });
+  if (!target) throw new Error("Member not found");
+
+  const membership = await getMembership(currentUser.id!, target.workspaceId);
+  requirePermission(membership.role, "MANAGE_MEMBERS");
+
   const member = await prisma.workspaceMember.update({
     where: { id: memberId },
     data: { role },
   });
-  revalidatePath("/");
+  revalidatePath("/dashboard");
+  revalidatePath("/team");
+  return member;
+}
+
+export async function createDepartment(workspaceId: string, data: { name: string; description?: string }) {
+  const currentUser = await getSessionUser();
+  const membership = await getMembership(currentUser.id!, workspaceId);
+  
+  requirePermission(membership.role, "CREATE_DEPARTMENT");
+  
+  const department = await prisma.department.create({
+    data: {
+      name: data.name,
+      description: data.description,
+      workspaceId,
+    },
+  });
+  
+  revalidatePath("/dashboard");
+  revalidatePath("/team");
+  return department;
+}
+
+export async function getDepartments(workspaceId: string) {
+  return prisma.department.findMany({
+    where: { workspaceId },
+    orderBy: { name: "asc" },
+  });
+}
+
+export async function createWorkspaceUser(workspaceId: string, data: { name: string; email: string; role: string; departmentId?: string }) {
+  const currentUser = await getSessionUser();
+  const membership = await getMembership(currentUser.id!, workspaceId);
+  
+  requirePermission(membership.role, "CREATE_USER");
+  
+  const existingUser = await prisma.user.findUnique({ where: { email: data.email } });
+  if (existingUser) throw new Error("A user with this email already exists");
+
+  // Default password "password123"
+  const hashedPassword = await bcrypt.hash("password123", 12);
+  
+  const user = await prisma.user.create({
+    data: {
+      name: data.name,
+      email: data.email,
+      hashedPassword,
+    },
+  });
+
+  const member = await prisma.workspaceMember.create({
+    data: {
+      userId: user.id,
+      workspaceId,
+      role: data.role,
+      departmentId: data.departmentId || null,
+    },
+    include: { user: true, department: true },
+  });
+
+  revalidatePath("/dashboard");
   revalidatePath("/team");
   return member;
 }
@@ -457,10 +687,42 @@ export async function getActivities(workspaceId: string, limit = 20) {
 
 // ─── Dashboard Stats ─────────────────────────────────────────
 
-export async function getDashboardStats(workspaceId: string) {
+export async function getDashboardStats(workspaceId: string, userId: string) {
+  const membership = await getMembership(userId, workspaceId);
+  const role = membership.role;
+
+  // View Reports gating
+  if (!canAttempt(role, "VIEW_REPORTS")) {
+    throw new Error("Permission denied: VIEW_REPORTS");
+  }
+
+  // Base queries
+  let projectWhere: any = { workspaceId };
+  let taskWhere: any = { project: { workspaceId } };
+
+  // Scope data based on limited access
+  if (role === "DEVELOPER") {
+    // DEVELOPER: Own reports only
+    taskWhere = { assigneeId: userId, project: { workspaceId } };
+    projectWhere = { workspaceId, tasks: { some: { assigneeId: userId } } };
+  } else if (role === "TEAM_LEAD") {
+    // TEAM_LEAD: Team reports (projects they are a part of, and tasks within those projects)
+    projectWhere = { workspaceId, tasks: { some: { assigneeId: userId } } };
+    const userProjects = await prisma.project.findMany({
+      where: projectWhere,
+      select: { id: true },
+    });
+    const projectIds = userProjects.map(p => p.id);
+    taskWhere = { projectId: { in: projectIds } };
+  } else if (role === "QA") {
+    // QA: QA reports (mostly concerned with REVIEW tasks and projects that have review tasks)
+    taskWhere = { project: { workspaceId }, status: { in: ["REVIEW", "DONE"] } };
+    projectWhere = { workspaceId, tasks: { some: { status: { in: ["REVIEW", "DONE"] } } } };
+  }
+
   const [projects, tasks, members] = await Promise.all([
-    prisma.project.findMany({ where: { workspaceId }, include: { tasks: true } }),
-    prisma.task.findMany({ where: { project: { workspaceId } } }),
+    prisma.project.findMany({ where: projectWhere, include: { tasks: true } }),
+    prisma.task.findMany({ where: taskWhere }),
     prisma.workspaceMember.findMany({ where: { workspaceId } }),
   ]);
 
@@ -505,4 +767,42 @@ export async function getDashboardStats(workspaceId: string) {
     completionRate,
     projectStats,
   };
+}
+
+// ─── Document Actions ────────────────────────────────────────
+
+export async function getDocuments(workspaceId: string) {
+  const user = await getSessionUser();
+  const membership = await getMembership(user.id!, workspaceId);
+
+  // Build query based on role
+  let where: any = { project: { workspaceId } };
+
+  if (membership.role === "DEVELOPER") {
+    // Only see documents in projects they are assigned to
+    const assignedProjects = await prisma.task.findMany({
+      where: { assigneeId: user.id!, project: { workspaceId } },
+      select: { projectId: true },
+      distinct: ["projectId"],
+    });
+    const projectIds = assignedProjects.map((t) => t.projectId);
+    where = { projectId: { in: projectIds } };
+  } else if (membership.role === "QA") {
+    // See documents in projects that have review/done tasks
+    const qaProjects = await prisma.project.findMany({
+      where: { workspaceId, tasks: { some: { status: { in: ["REVIEW", "DONE"] } } } },
+      select: { id: true },
+    });
+    const projectIds = qaProjects.map((p) => p.id);
+    where = { projectId: { in: projectIds } };
+  }
+
+  return prisma.document.findMany({
+    where,
+    include: {
+      uploadedBy: { select: { id: true, name: true, image: true } },
+      project: { select: { id: true, name: true, color: true } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
 }

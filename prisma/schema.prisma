@@ -15,7 +15,7 @@ model User {
   email          String    @unique
   hashedPassword String?
   image          String?
-  role           String    @default("MEMBER")
+  role           String    @default("DEVELOPER")
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -23,6 +23,7 @@ model User {
   assignedTasks    Task[]           @relation("TaskAssignee")
   comments         Comment[]
   activities       ActivityLog[]
+  documents        Document[]       @relation("DocumentUploader")
 }
 
 model Workspace {
@@ -34,14 +35,15 @@ model Workspace {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  members  WorkspaceMember[]
-  projects Project[]
+  members    WorkspaceMember[]
+  projects   Project[]
+  departments Department[]
   activities ActivityLog[]
 }
 
 model WorkspaceMember {
   id          String   @id @default(cuid())
-  role        String   @default("MEMBER")
+  role        String   @default("DEVELOPER")
   joinedAt    DateTime @default(now())
 
   userId      String
@@ -49,7 +51,23 @@ model WorkspaceMember {
   workspaceId String
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
+  departmentId String?
+  department   Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+
   @@unique([userId, workspaceId])
+}
+
+model Department {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  members     WorkspaceMember[]
 }
 
 model Project {
@@ -68,6 +86,7 @@ model Project {
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   tasks      Task[]
+  documents  Document[]
   activities ActivityLog[]
 
   @@unique([workspaceId, slug])
@@ -136,4 +155,19 @@ model ActivityLog {
 
   taskId      String?
   task        Task?      @relation(fields: [taskId], references: [id], onDelete: SetNull)
+}
+
+model Document {
+  id          String   @id @default(cuid())
+  name        String
+  storagePath String
+  mimeType    String
+  sizeBytes   Int
+  createdAt   DateTime @default(now())
+
+  projectId    String
+  project      Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  uploadedById String
+  uploadedBy   User    @relation("DocumentUploader", fields: [uploadedById], references: [id], onDelete: Cascade)
 }

@@ -52,8 +52,20 @@ export const subtaskSchema = z.object({
 
 export const memberInviteSchema = z.object({
   email: z.string().email("Invalid email address"),
-  role: z.enum(["ADMIN", "MEMBER", "VIEWER"]).default("MEMBER"),
-  workspaceId: z.string(),
+  role: z.enum(["ADMIN", "DEPT_HEAD", "PM", "TEAM_LEAD", "DEVELOPER", "QA"]).default("DEVELOPER"),
+  departmentId: z.string().optional(),
+});
+
+export const departmentSchema = z.object({
+  name: z.string().min(2, "Department name must be at least 2 characters"),
+  description: z.string().optional(),
+});
+
+export const createUserSchema = z.object({
+  name: z.string().min(2, "Name must be at least 2 characters"),
+  email: z.string().email("Invalid email address"),
+  role: z.enum(["ADMIN", "DEPT_HEAD", "PM", "TEAM_LEAD", "DEVELOPER", "QA"]).default("DEVELOPER"),
+  departmentId: z.string().optional(),
 });
 
 export type LoginInput = z.infer<typeof loginSchema>;

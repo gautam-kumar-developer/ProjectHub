@@ -25,13 +25,15 @@ import {
 } from "lucide-react";
 import { PROJECT_STATUS_CONFIG, formatDate } from "@/lib/utils";
 import { createProject } from "@/lib/actions";
+import { canAttempt } from "@/lib/rbac";
 
 interface ProjectsClientProps {
   projects: any[];
   workspaceId: string;
+  currentUserRole: string;
 }
 
-export function ProjectsClient({ projects, workspaceId }: ProjectsClientProps) {
+export function ProjectsClient({ projects, workspaceId, currentUserRole }: ProjectsClientProps) {
   const [search, setSearch] = React.useState("");
   const [statusFilter, setStatusFilter] = React.useState("ALL");
   const [showCreate, setShowCreate] = React.useState(false);
@@ -76,10 +78,12 @@ export function ProjectsClient({ projects, workspaceId }: ProjectsClientProps) {
             {projects.length} project{projects.length !== 1 ? "s" : ""} in your workspace
           </p>
         </div>
-        <Button onClick={() => setShowCreate(true)}>
-          <Plus className="h-4 w-4 mr-2" />
-          New Project
-        </Button>
+        {canAttempt(currentUserRole, "CREATE_PROJECT") && (
+          <Button onClick={() => setShowCreate(true)}>
+            <Plus className="h-4 w-4 mr-2" />
+            New Project
+          </Button>
+        )}
       </div>
 
       {/* Filters */}

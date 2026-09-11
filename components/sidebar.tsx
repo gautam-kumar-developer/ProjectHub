@@ -3,7 +3,9 @@
 import React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { cn } from "@/lib/utils";
+import { canAttempt, ROLE_CONFIG, type Role } from "@/lib/rbac";
 import {
   LayoutDashboard,
   FolderKanban,
@@ -14,19 +16,34 @@ import {
   ChevronLeft,
   ChevronRight,
   Layers,
+  Shield,
+  FileText,
 } from "lucide-react";
 
 const navItems = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/projects", label: "Projects", icon: FolderKanban },
-  { href: "/tasks", label: "Tasks", icon: CheckSquare },
-  { href: "/team", label: "Team", icon: Users },
-  { href: "/analytics", label: "Analytics", icon: BarChart3 },
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, action: null },
+  { href: "/projects", label: "Projects", icon: FolderKanban, action: null },
+  { href: "/tasks", label: "Tasks", icon: CheckSquare, action: null },
+  { href: "/documents", label: "Documents", icon: FileText, action: "UPLOAD_DOCUMENT" as const },
+  { href: "/team", label: "Team", icon: Users, action: null },
+  { href: "/analytics", label: "Analytics", icon: BarChart3, action: "VIEW_REPORTS" as const },
 ];
 
-export function Sidebar() {
+interface SidebarProps {
+  currentUserRole?: string;
+}
+
+export function Sidebar({ currentUserRole }: SidebarProps) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = React.useState(false);
+
+  const role = currentUserRole || "DEVELOPER";
+  const roleConfig = ROLE_CONFIG[role as Role];
+
+  const visibleItems = navItems.filter((item) => {
+    if (!item.action) return true;
+    return canAttempt(role, item.action);
+  });
 
   return (
     <aside
@@ -47,9 +64,19 @@ export function Sidebar() {
         )}
       </div>
 
+      {/* Role Badge */}
+      {!collapsed && roleConfig && (
+        <div className="px-3 pt-3">
+          <div className={cn("flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium", roleConfig.color)}>
+            <Shield className="h-3 w-3" />
+            {roleConfig.label}
+          </div>
+        </div>
+      )}
+
       {/* Navigation */}
       <nav className="flex-1 space-y-1 p-3">
-        {navItems.map((item) => {
+        {visibleItems.map((item) => {
           const isActive = pathname.startsWith(item.href);
           return (
             <Link

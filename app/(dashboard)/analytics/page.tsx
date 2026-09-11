@@ -15,7 +15,7 @@ export default async function AnalyticsPage() {
 
   if (!membership) redirect("/");
 
-  const stats = await getDashboardStats(membership.workspaceId);
+  const stats = await getDashboardStats(membership.workspaceId, session.user.id);
 
   // Get per-member workload data
   const members = await prisma.workspaceMember.findMany({

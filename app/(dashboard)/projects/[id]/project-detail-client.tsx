@@ -30,14 +30,17 @@ import {
   formatDate,
   getInitials,
 } from "@/lib/utils";
-import { createTask } from "@/lib/actions";
+import { createTask, deleteProject } from "@/lib/actions";
+import { canAttempt } from "@/lib/rbac";
+import { useRouter } from "next/navigation";
 
 interface ProjectDetailClientProps {
   project: any;
   currentUserId: string;
+  currentUserRole: string;
 }
 
-export function ProjectDetailClient({ project, currentUserId }: ProjectDetailClientProps) {
+export function ProjectDetailClient({ project, currentUserId, currentUserRole }: ProjectDetailClientProps) {
   const [showCreateTask, setShowCreateTask] = React.useState(false);
   const [selectedTask, setSelectedTask] = React.useState<any>(null);
   const [taskTitle, setTaskTitle] = React.useState("");
@@ -45,6 +48,9 @@ export function ProjectDetailClient({ project, currentUserId }: ProjectDetailCli
   const [taskStatus, setTaskStatus] = React.useState("TODO");
   const [taskAssigneeId, setTaskAssigneeId] = React.useState("");
   const [creating, setCreating] = React.useState(false);
+  const [deleting, setDeleting] = React.useState(false);
+  
+  const router = useRouter();
 
   const tasks = project.tasks || [];
   const totalTasks = tasks.length;
@@ -73,6 +79,18 @@ export function ProjectDetailClient({ project, currentUserId }: ProjectDetailCli
       console.error(err);
     }
     setCreating(false);
+  }
+
+  async function handleDeleteProject() {
+    if (!confirm("Are you sure you want to delete this project? This action cannot be undone.")) return;
+    setDeleting(true);
+    try {
+      await deleteProject(project.id);
+      router.push("/projects");
+    } catch (err: any) {
+      alert(err.message || "Failed to delete project");
+      setDeleting(false);
+    }
   }
 
   return (
@@ -113,10 +131,19 @@ export function ProjectDetailClient({ project, currentUserId }: ProjectDetailCli
             </span>
           </div>
         </div>
-        <Button onClick={() => setShowCreateTask(true)}>
-          <Plus className="h-4 w-4 mr-2" />
-          Add Task
-        </Button>
+        <div className="flex items-center gap-2">
+          {canAttempt(currentUserRole, "DELETE_PROJECT") && (
+            <Button variant="destructive" size="sm" onClick={handleDeleteProject} disabled={deleting}>
+              {deleting ? "Deleting..." : "Delete Project"}
+            </Button>
+          )}
+          {canAttempt(currentUserRole, "CREATE_TASK") && (
+            <Button onClick={() => setShowCreateTask(true)}>
+              <Plus className="h-4 w-4 mr-2" />
+              Add Task
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Progress */}
@@ -305,6 +332,7 @@ export function ProjectDetailClient({ project, currentUserId }: ProjectDetailCli
           task={selectedTask}
           members={members}
           currentUserId={currentUserId}
+          currentUserRole={currentUserRole}
           open={!!selectedTask}
           onClose={() => setSelectedTask(null)}
         />

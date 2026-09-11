@@ -188,3 +188,38 @@
     background-clip: text;
   }
 }
+
+/* ─── Dropzone Animations ──────────────────────────────────── */
+
+@keyframes borderGlow {
+  0%, 100% {
+    box-shadow: 0 0 12px hsl(217 91% 60% / 0.15), inset 0 0 12px hsl(217 91% 60% / 0.05);
+  }
+  50% {
+    box-shadow: 0 0 24px hsl(217 91% 60% / 0.3), inset 0 0 24px hsl(217 91% 60% / 0.1);
+  }
+}
+
+@keyframes dashScroll {
+  0% { background-position: 0 0; }
+  100% { background-position: 40px 0; }
+}
+
+.animate-border-glow {
+  animation: borderGlow 1.5s ease-in-out infinite;
+  border-radius: inherit;
+}
+
+.dropzone-active {
+  background-image: repeating-linear-gradient(
+    90deg,
+    hsl(217 91% 60% / 0.15) 0px,
+    hsl(217 91% 60% / 0.15) 8px,
+    transparent 8px,
+    transparent 16px
+  );
+  background-size: 40px 2px;
+  background-repeat: repeat-x;
+  background-position: 0 0;
+  animation: dashScroll 0.8s linear infinite;
+}

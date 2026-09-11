@@ -25,14 +25,16 @@ import {
 } from "lucide-react";
 import { PRIORITY_CONFIG, STATUS_CONFIG, formatDate, getInitials } from "@/lib/utils";
 import { createTask } from "@/lib/actions";
+import { canAttempt } from "@/lib/rbac";
 
 interface TasksClientProps {
   tasks: any[];
   projects: any[];
   members: any[];
+  currentUserRole: string;
 }
 
-export function TasksClient({ tasks, projects, members }: TasksClientProps) {
+export function TasksClient({ tasks, projects, members, currentUserRole }: TasksClientProps) {
   const [search, setSearch] = React.useState("");
   const [priorityFilter, setPriorityFilter] = React.useState("ALL");
   const [projectFilter, setProjectFilter] = React.useState("ALL");
@@ -79,10 +81,12 @@ export function TasksClient({ tasks, projects, members }: TasksClientProps) {
             {tasks.length} total tasks across all projects
           </p>
         </div>
-        <Button onClick={() => setShowCreate(true)}>
-          <Plus className="h-4 w-4 mr-2" />
-          New Task
-        </Button>
+        {canAttempt(currentUserRole, "CREATE_TASK") && (
+          <Button onClick={() => setShowCreate(true)}>
+            <Plus className="h-4 w-4 mr-2" />
+            New Task
+          </Button>
+        )}
       </div>
 
       {/* Filters */}
@@ -277,6 +281,7 @@ export function TasksClient({ tasks, projects, members }: TasksClientProps) {
           task={selectedTask}
           members={members}
           currentUserId=""
+          currentUserRole={currentUserRole}
           open={!!selectedTask}
           onClose={() => setSelectedTask(null)}
         />

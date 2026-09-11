@@ -21,6 +21,7 @@ export default async function ProjectsPage() {
     <ProjectsClient
       projects={JSON.parse(JSON.stringify(projects))}
       workspaceId={membership.workspaceId}
+      currentUserRole={membership.role}
     />
   );
 }

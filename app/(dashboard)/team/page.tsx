@@ -17,6 +17,7 @@ export default async function TeamPage() {
   const members = await prisma.workspaceMember.findMany({
     where: { workspaceId: membership.workspaceId },
     include: {
+      department: true,
       user: {
         include: {
           assignedTasks: {
@@ -28,9 +29,15 @@ export default async function TeamPage() {
     orderBy: { joinedAt: "asc" },
   });
 
+  const departments = await prisma.department.findMany({
+    where: { workspaceId: membership.workspaceId },
+    orderBy: { name: "asc" },
+  });
+
   return (
     <TeamClient
       members={JSON.parse(JSON.stringify(members))}
+      departments={JSON.parse(JSON.stringify(departments))}
       workspaceId={membership.workspaceId}
       workspaceName={membership.workspace.name}
       currentUserRole={membership.role}

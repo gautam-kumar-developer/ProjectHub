@@ -3,6 +3,7 @@
 import React from "react";
 import { signOut, useSession } from "next-auth/react";
 import { Avatar } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -11,16 +12,23 @@ import {
   DropdownMenuSeparator,
   DropdownMenuLabel,
 } from "@/components/ui/dropdown-menu";
-import { Bell, Search, Moon, Sun, LogOut, User } from "lucide-react";
+import { Bell, Search, Moon, Sun, LogOut, User, Shield } from "lucide-react";
 import { getInitials } from "@/lib/utils";
+import { ROLE_CONFIG, type Role } from "@/lib/rbac";
 
-export function Header() {
+interface HeaderProps {
+  currentUserRole?: string;
+}
+
+export function Header({ currentUserRole }: HeaderProps) {
   const { data: session } = useSession();
   const [darkMode, setDarkMode] = React.useState(true);
 
   React.useEffect(() => {
     document.documentElement.classList.toggle("dark", darkMode);
   }, [darkMode]);
+
+  const roleConfig = currentUserRole ? ROLE_CONFIG[currentUserRole as Role] : null;
 
   return (
     <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border bg-background/80 backdrop-blur-md px-6">
@@ -66,9 +74,15 @@ export function Header() {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuLabel>
-              <div className="flex flex-col">
+              <div className="flex flex-col gap-1">
                 <span className="text-sm font-medium text-foreground">{session?.user?.name}</span>
                 <span className="text-xs text-muted-foreground">{session?.user?.email}</span>
+                {roleConfig && (
+                  <Badge className={`${roleConfig.color} w-fit mt-1`} variant="outline">
+                    <Shield className="h-3 w-3 mr-1" />
+                    {roleConfig.label}
+                  </Badge>
+                )}
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />

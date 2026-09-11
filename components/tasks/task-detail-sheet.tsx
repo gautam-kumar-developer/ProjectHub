@@ -23,6 +23,7 @@ import {
   toggleSubtask,
   deleteSubtask,
 } from "@/lib/actions";
+import { canAttempt } from "@/lib/rbac";
 import {
   Calendar,
   MessageSquare,
@@ -32,12 +33,14 @@ import {
   Send,
   Square,
   CheckSquare2,
+  Lock,
 } from "lucide-react";
 
 interface TaskDetailSheetProps {
   task: any;
   members: any[];
   currentUserId: string;
+  currentUserRole: string;
   open: boolean;
   onClose: () => void;
 }
@@ -46,6 +49,7 @@ export function TaskDetailSheet({
   task,
   members,
   currentUserId,
+  currentUserRole,
   open,
   onClose,
 }: TaskDetailSheetProps) {
@@ -55,6 +59,7 @@ export function TaskDetailSheet({
   const [comment, setComment] = React.useState("");
   const [subtaskTitle, setSubtaskTitle] = React.useState("");
   const [saving, setSaving] = React.useState(false);
+  const [error, setError] = React.useState("");
 
   const subtasks = task.subtasks || [];
   const comments = task.comments || [];
@@ -62,19 +67,50 @@ export function TaskDetailSheet({
   const subtaskProgress = subtasks.length > 0 ? Math.round((completedSubtasks / subtasks.length) * 100) : 0;
   const priorityConfig = PRIORITY_CONFIG[priority as keyof typeof PRIORITY_CONFIG];
 
+  // RBAC checks
+  const isOwnTask = task.assigneeId === currentUserId;
+  const canManageProject = canAttempt(currentUserRole, "MANAGE_PROJECT");
+  const canAssign = canAttempt(currentUserRole, "ASSIGN_TASK");
+  const canUpdateStatus = canAttempt(currentUserRole, "UPDATE_OWN_TASK");
+  const canEditFields = isOwnTask || canManageProject;
+  const canDeleteThisTask = canManageProject;
+  const isQA = currentUserRole === "QA";
+
+  const canReview = canAttempt(currentUserRole, "REVIEW_CODE");
+  const canQA = canAttempt(currentUserRole, "QA_TASK");
+  const canApprove = canAttempt(currentUserRole, "APPROVE_TASK");
+
   async function handleStatusChange(newStatus: string) {
     setStatus(newStatus);
-    await updateTask(task.id, { status: newStatus });
+    setError("");
+    try {
+      await updateTask(task.id, { status: newStatus });
+    } catch (err: any) {
+      setError(err.message || "Permission denied");
+      setStatus(task.status); // revert
+    }
   }
 
   async function handlePriorityChange(newPriority: string) {
     setPriority(newPriority);
-    await updateTask(task.id, { priority: newPriority });
+    setError("");
+    try {
+      await updateTask(task.id, { priority: newPriority });
+    } catch (err: any) {
+      setError(err.message || "Permission denied");
+      setPriority(task.priority); // revert
+    }
   }
 
   async function handleAssigneeChange(newAssigneeId: string) {
     setAssigneeId(newAssigneeId);
-    await updateTask(task.id, { assigneeId: newAssigneeId || null });
+    setError("");
+    try {
+      await updateTask(task.id, { assigneeId: newAssigneeId || null });
+    } catch (err: any) {
+      setError(err.message || "Permission denied");
+      setAssigneeId(task.assigneeId || ""); // revert
+    }
   }
 
   async function handleAddComment() {
@@ -101,8 +137,12 @@ export function TaskDetailSheet({
 
   async function handleDelete() {
     if (confirm("Delete this task?")) {
-      await deleteTask(task.id);
-      onClose();
+      try {
+        await deleteTask(task.id);
+        onClose();
+      } catch (err: any) {
+        setError(err.message || "Permission denied");
+      }
     }
   }
 
@@ -122,42 +162,101 @@ export function TaskDetailSheet({
           {task.description && (
             <p className="text-sm text-muted-foreground mt-1">{task.description}</p>
           )}
+
+          {/* RBAC Quick Actions */}
+          <div className="flex flex-wrap items-center gap-2 mt-4">
+            {status === "IN_PROGRESS" && canReview && (
+              <Button size="sm" onClick={() => handleStatusChange("REVIEW")} className="bg-blue-600 hover:bg-blue-700">
+                <CheckSquare className="h-4 w-4 mr-2" />
+                Submit for Review
+              </Button>
+            )}
+            {status === "REVIEW" && canQA && (
+              <Button size="sm" onClick={() => handleStatusChange("DONE")} className="bg-purple-600 hover:bg-purple-700">
+                <CheckSquare2 className="h-4 w-4 mr-2" />
+                QA Pass
+              </Button>
+            )}
+            {status === "REVIEW" && canApprove && !isQA && (
+              <Button size="sm" onClick={() => handleStatusChange("DONE")} className="bg-emerald-600 hover:bg-emerald-700">
+                <CheckSquare2 className="h-4 w-4 mr-2" />
+                Approve Task
+              </Button>
+            )}
+          </div>
         </SheetHeader>
 
         <div className="space-y-6 p-6 pt-2">
+          {/* Permission Error */}
+          {error && (
+            <div className="rounded-lg bg-destructive/10 border border-destructive/20 px-4 py-3 text-sm text-destructive flex items-center gap-2">
+              <Lock className="h-4 w-4 shrink-0" />
+              {error}
+            </div>
+          )}
+
           {/* Properties */}
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground uppercase">Status</label>
-              <Select value={status} onValueChange={handleStatusChange}>
-                <SelectOption value="TODO">To Do</SelectOption>
-                <SelectOption value="IN_PROGRESS">In Progress</SelectOption>
-                <SelectOption value="REVIEW">Review</SelectOption>
-                <SelectOption value="DONE">Done</SelectOption>
-              </Select>
+              {canUpdateStatus ? (
+                <Select value={status} onValueChange={handleStatusChange}>
+                  <SelectOption value="TODO">To Do</SelectOption>
+                  <SelectOption value="IN_PROGRESS">In Progress</SelectOption>
+                  <SelectOption value="REVIEW">Review</SelectOption>
+                  <SelectOption value="DONE">Done</SelectOption>
+                </Select>
+              ) : (
+                <Badge variant="secondary">
+                  {STATUS_CONFIG[status as keyof typeof STATUS_CONFIG]?.label || status}
+                </Badge>
+              )}
             </div>
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground uppercase">Priority</label>
-              <Select value={priority} onValueChange={handlePriorityChange}>
-                <SelectOption value="LOW">Low</SelectOption>
-                <SelectOption value="MEDIUM">Medium</SelectOption>
-                <SelectOption value="HIGH">High</SelectOption>
-                <SelectOption value="URGENT">Urgent</SelectOption>
-              </Select>
+              {canEditFields && !isQA ? (
+                <Select value={priority} onValueChange={handlePriorityChange}>
+                  <SelectOption value="LOW">Low</SelectOption>
+                  <SelectOption value="MEDIUM">Medium</SelectOption>
+                  <SelectOption value="HIGH">High</SelectOption>
+                  <SelectOption value="URGENT">Urgent</SelectOption>
+                </Select>
+              ) : (
+                <Badge className={priorityConfig?.color || ""} variant="outline">
+                  {priorityConfig?.label || priority}
+                </Badge>
+              )}
             </div>
           </div>
 
           {/* Assignee */}
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-muted-foreground uppercase">Assignee</label>
-            <Select value={assigneeId} onValueChange={handleAssigneeChange}>
-              <SelectOption value="">Unassigned</SelectOption>
-              {members.map((m: any) => (
-                <SelectOption key={m.user.id} value={m.user.id}>
-                  {m.user.name}
-                </SelectOption>
-              ))}
-            </Select>
+            {canAssign ? (
+              <Select value={assigneeId} onValueChange={handleAssigneeChange}>
+                <SelectOption value="">Unassigned</SelectOption>
+                {members.map((m: any) => (
+                  <SelectOption key={m.user.id} value={m.user.id}>
+                    {m.user.name}
+                  </SelectOption>
+                ))}
+              </Select>
+            ) : (
+              <div className="flex items-center gap-2 py-1">
+                {task.assignee ? (
+                  <>
+                    <Avatar
+                      src={task.assignee.image}
+                      fallback={getInitials(task.assignee.name)}
+                      size="sm"
+                    />
+                    <span className="text-sm">{task.assignee.name}</span>
+                  </>
+                ) : (
+                  <span className="text-sm text-muted-foreground">Unassigned</span>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Due Date */}
@@ -210,28 +309,32 @@ export function TaskDetailSheet({
                   >
                     {subtask.title}
                   </span>
-                  <button
-                    onClick={() => deleteSubtask(subtask.id)}
-                    className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all cursor-pointer"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
+                  {canEditFields && (
+                    <button
+                      onClick={() => deleteSubtask(subtask.id)}
+                      className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all cursor-pointer"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
 
-            <div className="flex items-center gap-2">
-              <Input
-                placeholder="Add subtask..."
-                value={subtaskTitle}
-                onChange={(e) => setSubtaskTitle(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleAddSubtask()}
-                className="text-sm h-8"
-              />
-              <Button size="sm" variant="outline" onClick={handleAddSubtask} disabled={!subtaskTitle.trim()}>
-                <Plus className="h-3 w-3" />
-              </Button>
-            </div>
+            {canEditFields && (
+              <div className="flex items-center gap-2">
+                <Input
+                  placeholder="Add subtask..."
+                  value={subtaskTitle}
+                  onChange={(e) => setSubtaskTitle(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleAddSubtask()}
+                  className="text-sm h-8"
+                />
+                <Button size="sm" variant="outline" onClick={handleAddSubtask} disabled={!subtaskTitle.trim()}>
+                  <Plus className="h-3 w-3" />
+                </Button>
+              </div>
+            )}
           </div>
 
           {/* Comments */}
@@ -244,7 +347,7 @@ export function TaskDetailSheet({
               )}
             </h4>
 
-            {/* Add Comment */}
+            {/* Add Comment — all roles can comment */}
             <div className="flex items-start gap-2">
               <Textarea
                 placeholder="Write a comment..."
@@ -286,12 +389,14 @@ export function TaskDetailSheet({
           </div>
 
           {/* Delete */}
-          <div className="pt-4 border-t border-border">
-            <Button variant="destructive" size="sm" onClick={handleDelete} className="w-full">
-              <Trash2 className="h-4 w-4 mr-2" />
-              Delete Task
-            </Button>
-          </div>
+          {canDeleteThisTask && (
+            <div className="pt-4 border-t border-border">
+              <Button variant="destructive" size="sm" onClick={handleDelete} className="w-full">
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete Task
+              </Button>
+            </div>
+          )}
         </div>
       </SheetContent>
     </Sheet>

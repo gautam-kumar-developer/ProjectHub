@@ -27,7 +27,7 @@ export default async function DashboardPage() {
 
   const workspaceId = membership.workspaceId;
   const [stats, activities] = await Promise.all([
-    getDashboardStats(workspaceId),
+    getDashboardStats(workspaceId, session.user.id),
     getActivities(workspaceId, 10),
   ]);
 

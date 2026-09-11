@@ -39,6 +39,7 @@ export default async function TasksPage() {
       tasks={JSON.parse(JSON.stringify(tasks))}
       projects={JSON.parse(JSON.stringify(projects))}
       members={JSON.parse(JSON.stringify(members))}
+      currentUserRole={membership.role}
     />
   );
 }
