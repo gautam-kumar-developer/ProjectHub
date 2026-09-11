@@ -7,12 +7,13 @@ export default auth((req: NextRequest & { auth: any }) => {
   const isAuthPage = req.nextUrl.pathname.startsWith("/login") || 
                      req.nextUrl.pathname.startsWith("/register");
   const isApiRoute = req.nextUrl.pathname.startsWith("/api");
+  const isLandingPage = req.nextUrl.pathname === "/";
 
-  if (isApiRoute) return NextResponse.next();
+  if (isApiRoute || isLandingPage) return NextResponse.next();
 
   if (isAuthPage) {
     if (isLoggedIn) {
-      return NextResponse.redirect(new URL("/", req.url));
+      return NextResponse.redirect(new URL("/dashboard", req.url));
     }
     return NextResponse.next();
   }

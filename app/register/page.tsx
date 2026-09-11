@@ -33,7 +33,7 @@ export default function RegisterPage() {
       if (result?.error) {
         setError("Account created but login failed. Please sign in manually.");
       } else {
-        router.push("/");
+        router.push("/dashboard");
         router.refresh();
       }
     } catch (err: any) {
