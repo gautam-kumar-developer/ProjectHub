@@ -150,8 +150,11 @@ export default function LoginPage() {
 
                 <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
                   <p><strong>Admin:</strong> admin@projecthub.com / password123</p>
-                  <p><strong>Member:</strong> sarah@projecthub.com / password123</p>
-                  <p><strong>Developer:</strong> mike@projecthub.com / password123</p>
+                  <p><strong>Dept Head:</strong> dh@projecthub.com / password123</p>
+                  <p><strong>PM:</strong> pm@projecthub.com / password123</p>
+                  <p><strong>Team Lead:</strong> tl@projecthub.com / password123</p>
+                  <p><strong>Developer:</strong> dev@projecthub.com / password123</p>
+                  <p><strong>QA:</strong> qa@projecthub.com / password123</p>
                 </div>
               </form>
 
